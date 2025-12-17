@@ -22,6 +22,7 @@ $router->add('/google-login', 'providers/google-login.php');
 // Admin/status
 $router->add('/admin', 'admin/index.php');
 $router->add('/status', 'status.php');
+$router->add('/privacy', 'privacy.php');
 
 // Default: show hub info
 $router->setDefault('hub.php');

@@ -69,7 +69,12 @@
             <h3>Google OAuth (Full Access) <span class="status active">Active</span></h3>
             <p><strong>Callback:</strong> <code>https://auth.giobi.com/google/callback</code></p>
             <p><strong>Used by:</strong> brain tools (Gmail, Drive, Calendar, Analytics)</p>
-            <p><strong>Scopes:</strong> Full Google Workspace</p>
+            <p><strong>Scopes:</strong> Gmail, Calendar, Drive, Analytics, YouTube</p>
+            <p style="margin-top: 10px;">
+                <a href="/google" style="background: #4285f4; color: white; padding: 8px 16px; border-radius: 5px; text-decoration: none; font-size: 14px;">
+                    🔑 Authorize / Refresh Token
+                </a>
+            </p>
         </div>
 
         <div class="provider google">
@@ -82,6 +87,7 @@
         <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
         <p style="color: #999; font-size: 14px;">
             Giobi &copy; <?= date('Y') ?> |
+            <a href="/privacy" style="color: #007bff;">Privacy Policy</a> |
             <a href="/status" style="color: #007bff;">Status</a>
         </p>
     </div>
