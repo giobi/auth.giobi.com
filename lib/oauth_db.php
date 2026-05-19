@@ -11,6 +11,41 @@ class OAuthDB {
     public function __construct() {
         $this->db = new SQLite3($this->dbPath);
         $this->db->busyTimeout(5000);
+        $this->db->exec('CREATE TABLE IF NOT EXISTS handoff_codes (
+            code TEXT PRIMARY KEY, email TEXT NOT NULL, provider TEXT NOT NULL,
+            expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL)');
+    }
+
+    /**
+     * Crea un handoff code monouso (email,provider) -> code. TTL secondi.
+     */
+    public function createHandoff($email, $provider, $ttl = 120) {
+        $this->db->exec('DELETE FROM handoff_codes WHERE expires_at < strftime("%s","now")');
+        $code = bin2hex(random_bytes(24));
+        $stmt = $this->db->prepare('INSERT INTO handoff_codes
+            (code,email,provider,expires_at,created_at)
+            VALUES (:c,:e,:p,strftime("%s","now")+:ttl,strftime("%s","now"))');
+        $stmt->bindValue(':c', $code, SQLITE3_TEXT);
+        $stmt->bindValue(':e', $email, SQLITE3_TEXT);
+        $stmt->bindValue(':p', $provider, SQLITE3_TEXT);
+        $stmt->bindValue(':ttl', (int)$ttl, SQLITE3_INTEGER);
+        $stmt->execute();
+        return $code;
+    }
+
+    /**
+     * Riscatta un handoff code: ritorna [email,provider] e lo CANCELLA (monouso).
+     * null se inesistente/scaduto.
+     */
+    public function redeemHandoff($code) {
+        $stmt = $this->db->prepare('SELECT email,provider FROM handoff_codes
+            WHERE code = :c AND expires_at >= strftime("%s","now")');
+        $stmt->bindValue(':c', $code, SQLITE3_TEXT);
+        $row = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+        $del = $this->db->prepare('DELETE FROM handoff_codes WHERE code = :c');
+        $del->bindValue(':c', $code, SQLITE3_TEXT);
+        $del->execute();
+        return $row ?: null;
     }
 
     /**

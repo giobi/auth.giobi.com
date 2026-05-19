@@ -39,12 +39,22 @@ if (($claims['aud'] ?? '') !== 'auth.giobi.com') { _fail(401, 'bad aud'); }
 if (!isset($claims['exp']) || time() >= (int)$claims['exp']) { _fail(401, 'expired'); }
 if (isset($claims['iat']) && (int)$claims['iat'] > time() + 60) { _fail(401, 'bad iat'); }
 
-$provider = preg_replace('/[^a-z0-9_-]/i', '', $_GET['provider'] ?? '');
-$email = trim($_GET['email'] ?? '');
-if ($provider === '' || $email === '') { _fail(400, 'provider and email required'); }
-
 require_once __DIR__ . '/../lib/oauth_db.php';
 $db = new OAuthDB();
+
+$code = trim($_GET['code'] ?? '');
+if ($code !== '') {
+    // path preferito: handoff code monouso (consumato qui)
+    $h = $db->redeemHandoff($code);
+    if (!$h) { _fail(404, 'invalid or expired code'); }
+    $email = $h['email'];
+    $provider = $h['provider'];
+} else {
+    // back-compat: lookup diretto per email+provider
+    $provider = preg_replace('/[^a-z0-9_-]/i', '', $_GET['provider'] ?? '');
+    $email = trim($_GET['email'] ?? '');
+    if ($provider === '' || $email === '') { _fail(400, 'provider+email or code required'); }
+}
 $tok = $db->getTokens($email, $provider);
 if (!$tok || empty($tok['refresh_token'])) {
     _fail(404, 'no stored token — user must authenticate at auth.giobi.com');

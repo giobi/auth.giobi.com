@@ -183,6 +183,25 @@ function handleCallback($client, $config, $app) {
         $userInfo = getUserInfo($token['access_token']);
         $email = $userInfo['email'] ?? null;
 
+        // === Contract abchat <-> hub: token nel DB transiente + handoff monouso ===
+        if ($email && (!empty($refreshToken) || !empty($token['access_token']))) {
+            require_once __DIR__ . '/../lib/oauth_db.php';
+            require_once __DIR__ . '/../lib/db.php';
+            $odb = new OAuthDB();
+            $exp = !empty($token['expires_in']) ? (time() + (int)$token['expires_in']) : null;
+            $odb->saveTokens($email, 'google', $token['access_token'] ?? null, $refreshToken, $exp);
+            $GLOBALS['HANDOFF_CODE'] = $odb->createHandoff($email, 'google');
+            logOAuthAttempt('google_contract_stored', ['app' => $app, 'email' => $email]); // niente token nei log
+            if (function_exists('getCallbackUrl')) {
+                $cb = getCallbackUrl($app);
+                if ($cb) {
+                    $sep = (strpos($cb, '?') !== false) ? '&' : '?';
+                    header('Location: ' . $cb . $sep . 'code=' . urlencode($GLOBALS['HANDOFF_CODE']));
+                    exit;
+                }
+            }
+        }
+
         // Check if this email has an associated .env to update
         $envPath = getEnvPathForEmail($email);
 
@@ -406,6 +425,10 @@ function showSuccess($updated, $userInfo, $encryptResult, $config) {
 <body>
     <div class="container">
         <h1>✅ OAuth Success!</h1>
+        <?php if (!empty($GLOBALS['HANDOFF_CODE'])): ?>
+        <p class="info">Handoff code (monouso, valido ~2 min) — l'app lo scambia per il token via back-channel:</p>
+        <p><code><?= htmlspecialchars($GLOBALS['HANDOFF_CODE']) ?></code></p>
+        <?php endif; ?>
 
         <div class="success-box">
             <strong>App:</strong> Google (<?= htmlspecialchars($appName) ?>)<br>
