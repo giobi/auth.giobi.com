@@ -38,7 +38,15 @@ if (strpos($_SERVER['REQUEST_URI'], '/callback') !== false) {
 } else {
     // Initial request: get app from query param
     $app = $_GET['app'] ?? 'brain';
-    logOAuthAttempt('google_start', ['app' => $app]);
+    // from= : return URL dinamico, validato SUBITO contro l'allowlist (fail-fast)
+    $returnUrl = $_GET['from'] ?? '';
+    if ($returnUrl !== '' && !return_host_allowed($returnUrl)) {
+        http_response_code(400);
+        header('Content-Type: text/plain');
+        logOAuthAttempt('google_from_rejected', ['app' => $app]); // niente url completo nei log
+        exit('from: return URL non consentito (host non in ALLOWED_RETURN_HOSTS)');
+    }
+    logOAuthAttempt('google_start', ['app' => $app, 'has_from' => $returnUrl !== '']);
 }
 
 // Get app configuration
@@ -54,6 +62,33 @@ $client->setPrompt('consent');  // Force consent screen ALWAYS
 $client->setApprovalPrompt('force');  // Force approval (legacy parameter)
 $client->setIncludeGrantedScopes(false);  // Don't use incremental auth
 $client->addScope($config['scopes']);
+
+/**
+ * Return URL allowlist: https + host in ALLOWED_RETURN_HOSTS (wildcard *.dominio).
+ * Anti open-redirect: from= accettato SOLO se l'host matcha l'allowlist.
+ */
+function return_host_allowed($url) {
+    $p = @parse_url((string)$url);
+    if (!$p || ($p['scheme'] ?? '') !== 'https') return false;
+    if (!empty($p['user']) || !empty($p['pass'])) return false;
+    $host = strtolower($p['host'] ?? '');
+    if ($host === '' || filter_var($host, FILTER_VALIDATE_IP)) return false;
+    $raw = function_exists('env') ? env('ALLOWED_RETURN_HOSTS', '') : getenv('ALLOWED_RETURN_HOSTS');
+    foreach (array_filter(array_map('trim', explode(',', (string)$raw))) as $pat) {
+        $pat = strtolower($pat);
+        if (strpos($pat, '*.') === 0) {
+            $base = substr($pat, 2);
+            if ($host === $base ||
+                (strlen($host) > strlen($base) + 1 &&
+                 substr($host, -(strlen($base) + 1)) === '.' . $base)) {
+                return true;
+            }
+        } elseif ($host === $pat) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * Get configuration for specific app
@@ -119,6 +154,11 @@ if (strpos($_SERVER['REQUEST_URI'], '/callback') !== false) {
 
 // Start OAuth flow with state parameter containing app identifier
 $state = $app . '-' . bin2hex(random_bytes(16));
+// associa il return URL (già validato) allo state, sopravvive al round-trip Google
+if (!empty($returnUrl)) {
+    require_once __DIR__ . '/../lib/oauth_db.php';
+    (new OAuthDB())->saveStateReturn($state, $returnUrl);
+}
 $client->setState($state);
 $authUrl = $client->createAuthUrl();
 
@@ -192,6 +232,14 @@ function handleCallback($client, $config, $app) {
             $odb->saveTokens($email, 'google', $token['access_token'] ?? null, $refreshToken, $exp);
             $GLOBALS['HANDOFF_CODE'] = $odb->createHandoff($email, 'google');
             logOAuthAttempt('google_contract_stored', ['app' => $app, 'email' => $email]); // niente token nei log
+            // 1) return URL dinamico (from=, già allowlistato in entrata, ri-validato qui)
+            $ret = $odb->popStateReturn($_GET['state'] ?? '');
+            if ($ret && return_host_allowed($ret)) {
+                $sep = (strpos($ret, '?') !== false) ? '&' : '?';
+                header('Location: ' . $ret . $sep . 'code=' . urlencode($GLOBALS['HANDOFF_CODE']));
+                exit;
+            }
+            // 2) callback_url registrato nella tabella apps (fallback)
             if (function_exists('getCallbackUrl')) {
                 $cb = getCallbackUrl($app);
                 if ($cb) {

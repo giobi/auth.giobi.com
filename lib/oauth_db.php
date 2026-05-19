@@ -14,6 +14,9 @@ class OAuthDB {
         $this->db->exec('CREATE TABLE IF NOT EXISTS handoff_codes (
             code TEXT PRIMARY KEY, email TEXT NOT NULL, provider TEXT NOT NULL,
             expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL)');
+        $this->db->exec('CREATE TABLE IF NOT EXISTS state_returns (
+            state TEXT PRIMARY KEY, return_url TEXT NOT NULL,
+            expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL)');
     }
 
     /**
@@ -46,6 +49,34 @@ class OAuthDB {
         $del->bindValue(':c', $code, SQLITE3_TEXT);
         $del->execute();
         return $row ?: null;
+    }
+
+    /**
+     * Associa un return_url allo state OAuth (sopravvive al round-trip Google).
+     */
+    public function saveStateReturn($state, $returnUrl, $ttl = 900) {
+        $this->db->exec('DELETE FROM state_returns WHERE expires_at < strftime("%s","now")');
+        $stmt = $this->db->prepare('INSERT OR REPLACE INTO state_returns
+            (state,return_url,expires_at,created_at)
+            VALUES (:s,:u,strftime("%s","now")+:ttl,strftime("%s","now"))');
+        $stmt->bindValue(':s', $state, SQLITE3_TEXT);
+        $stmt->bindValue(':u', $returnUrl, SQLITE3_TEXT);
+        $stmt->bindValue(':ttl', (int)$ttl, SQLITE3_INTEGER);
+        return $stmt->execute();
+    }
+
+    /**
+     * Recupera e CANCELLA il return_url per uno state (monouso). null se assente/scaduto.
+     */
+    public function popStateReturn($state) {
+        $stmt = $this->db->prepare('SELECT return_url FROM state_returns
+            WHERE state = :s AND expires_at >= strftime("%s","now")');
+        $stmt->bindValue(':s', $state, SQLITE3_TEXT);
+        $row = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+        $del = $this->db->prepare('DELETE FROM state_returns WHERE state = :s');
+        $del->bindValue(':s', $state, SQLITE3_TEXT);
+        $del->execute();
+        return $row ? $row['return_url'] : null;
     }
 
     /**
