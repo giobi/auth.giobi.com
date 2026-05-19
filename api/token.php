@@ -19,25 +19,14 @@ function _fail($code, $msg) {
     exit;
 }
 
+// Auth: Bearer statico = ABCHAT_AUTH_HUB_SECRET (segreto condiviso abchat<->hub).
 $secret = env('ABCHAT_AUTH_HUB_SECRET');
 if (!$secret) { _fail(500, 'hub auth not configured'); }
 
 $hdr = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
 if (stripos($hdr, 'Bearer ') !== 0) { _fail(401, 'missing bearer'); }
-$jwt = trim(substr($hdr, 7));
-$parts = explode('.', $jwt);
-if (count($parts) !== 3) { _fail(401, 'malformed token'); }
-list($h, $p, $sig) = $parts;
-
-$expected = rtrim(strtr(base64_encode(hash_hmac('sha256', "$h.$p", $secret, true)), '+/', '-_'), '=');
-if (!hash_equals($expected, $sig)) { _fail(401, 'bad signature'); }
-
-$claims = json_decode(_b64url_decode($p), true);
-if (!is_array($claims)) { _fail(401, 'bad claims'); }
-if (($claims['iss'] ?? '') !== 'abchat') { _fail(401, 'bad iss'); }
-if (($claims['aud'] ?? '') !== 'auth.giobi.com') { _fail(401, 'bad aud'); }
-if (!isset($claims['exp']) || time() >= (int)$claims['exp']) { _fail(401, 'expired'); }
-if (isset($claims['iat']) && (int)$claims['iat'] > time() + 60) { _fail(401, 'bad iat'); }
+$bearer = trim(substr($hdr, 7));
+if (!hash_equals((string)$secret, $bearer)) { _fail(401, 'bad token'); }
 
 require_once __DIR__ . '/../lib/oauth_db.php';
 $db = new OAuthDB();
