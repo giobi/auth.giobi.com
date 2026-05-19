@@ -223,63 +223,26 @@ function handleCallback($client, $config, $app) {
         $userInfo = getUserInfo($token['access_token']);
         $email = $userInfo['email'] ?? null;
 
-        // === Contract abchat <-> hub: token nel DB transiente + handoff monouso ===
-        if ($email && (!empty($refreshToken) || !empty($token['access_token']))) {
-            require_once __DIR__ . '/../lib/oauth_db.php';
-            require_once __DIR__ . '/../lib/db.php';
-            $odb = new OAuthDB();
-            $exp = !empty($token['expires_in']) ? (time() + (int)$token['expires_in']) : null;
-            $odb->saveTokens($email, 'google', $token['access_token'] ?? null, $refreshToken, $exp);
-            $GLOBALS['HANDOFF_CODE'] = $odb->createHandoff($email, 'google');
-            logOAuthAttempt('google_contract_stored', ['app' => $app, 'email' => $email]); // niente token nei log
-            // 1) return URL dinamico (from=, già allowlistato in entrata, ri-validato qui)
-            $ret = $odb->popStateReturn($_GET['state'] ?? '');
-            if ($ret && return_host_allowed($ret)) {
-                $sep = (strpos($ret, '?') !== false) ? '&' : '?';
-                header('Location: ' . $ret . $sep . 'code=' . urlencode($GLOBALS['HANDOFF_CODE']));
-                exit;
-            }
-            // 2) callback_url registrato nella tabella apps (fallback)
-            if (function_exists('getCallbackUrl')) {
-                $cb = getCallbackUrl($app);
-                if ($cb) {
-                    $sep = (strpos($cb, '?') !== false) ? '&' : '?';
-                    header('Location: ' . $cb . $sep . 'code=' . urlencode($GLOBALS['HANDOFF_CODE']));
-                    exit;
-                }
-            }
+        // Pagina credenziali AGNOSTICA. L'hub fa il consenso UNA volta e
+        // restituisce all'utente i valori da incollare nel proprio .env.
+        // Da qui in poi il brain fa OAuth diretto: l'hub esce dal runtime.
+        if (empty($refreshToken)) {
+            logOAuthAttempt('google_no_refresh_token', ['app' => $app, 'email' => $email]);
+            showError('Google non ha restituito un refresh_token. Revoca l\'accesso precedente su myaccount.google.com e ripeti il consenso.', $config);
+            return;
         }
 
-        // Check if this email has an associated .env to update
-        $envPath = getEnvPathForEmail($email);
+        require_once __DIR__ . '/../lib/handoff_page.php';
 
-        if ($envPath && $refreshToken) {
-            // Authorized email: update .env
-            $updated = [];
-            updateEnvFile($envPath, $config['token_var'], $refreshToken);
-            $updated[] = $config['token_var'];
+        $vars = [
+            'GMAIL_CLIENT_ID'     => $config['client_id'],
+            'GMAIL_CLIENT_SECRET' => $config['client_secret'],
+            'GMAIL_REFRESH_TOKEN' => $refreshToken,
+            'GMAIL_ACCOUNT'       => $email,
+        ];
 
-            // Re-encrypt .env.gpg
-            $encryptResult = reencryptEnv();
-
-            logOAuthAttempt('google_success', [
-                'app' => $app,
-                'email' => $email,
-                'token_var' => $config['token_var'],
-                'env_path' => $envPath,
-            ]);
-
-            showSuccess($updated, $userInfo, $encryptResult, $config);
-        } else {
-            // Unknown email or no refresh token: show token on screen, don't touch .env
-            logOAuthAttempt('google_token_display_only', [
-                'app' => $app,
-                'email' => $email,
-                'reason' => !$envPath ? 'email_not_authorized' : 'no_refresh_token',
-            ]);
-
-            showTokenOnly($token, $userInfo, $config);
-        }
+        logOAuthAttempt('google_credentials_rendered', ['app' => $app, 'email' => $email]); // niente token nei log
+        render_credentials_page($vars);
 
     } catch (Exception $e) {
         logOAuthAttempt('google_exception', [
