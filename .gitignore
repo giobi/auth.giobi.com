@@ -1,18 +1,16 @@
-# Environment (contains secrets)
+# SEGRETI / DATI — MAI in git
 .env
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+.env.*
+*.env
+data/
+*.sqlite
+*.sqlite-*
+*.db
+# log / runtime
 *.log
-
-# Temp
-/tmp/
+logs/
+# deps / junk
+vendor/
+node_modules/
+.DS_Store
+!.env.example

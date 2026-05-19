@@ -2,28 +2,71 @@
 /**
  * Microsoft OAuth Provider
  *
- * Handles OAuth callback for Microsoft Graph (Office 365).
- * Exchanges code for tokens and delivers via webhook POST.
+ * Handles OAuth flow for Microsoft Graph (Office 365).
  *
  * Flow:
- * 1. App redirects user to Microsoft with state=app_name
- * 2. User authorizes
+ * 1. App redirects here with ?state=app_name (or app_name:payload for complex state)
+ * 2. We redirect user to Microsoft OAuth
  * 3. Microsoft redirects here with code + state
  * 4. We exchange code for tokens
  * 5. We POST tokens to app's webhook URL (from database)
- * 6. Show success page
+ * 6. Show success page (or redirect back to app)
  */
 
 require_once __DIR__ . '/../lib/db.php';
 
-// Check for OAuth code
-if (!isset($_GET['code'])) {
-    http_response_code(400);
-    die('Missing authorization code. Start OAuth flow from your application.');
+// Get credentials from env
+$client_id = env('MS_GRAPH_CLIENT_ID');
+$client_secret = env('MS_GRAPH_CLIENT_SECRET');
+$tenant_id = env('MS_GRAPH_TENANT_ID');
+$redirect_uri = env('MS_GRAPH_REDIRECT_URI', 'https://auth.giobi.com/microsoft/callback');
+
+// Validate credentials
+if (empty($client_id) || empty($client_secret) || empty($tenant_id)) {
+    http_response_code(500);
+    die('Microsoft Graph credentials not configured in .env');
 }
 
+// STEP 1: If no code, start OAuth flow by redirecting to Microsoft
+if (!isset($_GET['code'])) {
+    $state = $_GET['state'] ?? '';
+
+    if (empty($state)) {
+        http_response_code(400);
+        die('Missing state parameter. Include ?state=app_name to start OAuth flow.');
+    }
+
+    // Build Microsoft OAuth URL
+    $scopes = 'Calendars.Read Calendars.ReadWrite Files.Read.All Mail.Read Mail.ReadBasic Mail.ReadWrite Mail.ReadWrite.Shared Mail.Send offline_access User.Read';
+
+    $auth_url = "https://login.microsoftonline.com/{$tenant_id}/oauth2/v2.0/authorize?" . http_build_query([
+        'client_id' => $client_id,
+        'response_type' => 'code',
+        'redirect_uri' => $redirect_uri,
+        'response_mode' => 'query',
+        'scope' => $scopes,
+        'state' => $state,
+        // Don't use prompt=consent - it forces re-consent which needs admin approval
+        // The existing admin consent should be enough
+    ]);
+
+    header('Location: ' . $auth_url);
+    exit;
+}
+
+// STEP 2: Handle callback from Microsoft
 $code = $_GET['code'];
-$app_name = $_GET['state'] ?? null;
+$full_state = $_GET['state'] ?? null;
+
+// Extract app name from state (format: "app_name" or "app_name:payload")
+// For brain-saas, state is "brain-saas:{signed_payload}"
+$app_name = null;
+$state_payload = null;
+if ($full_state) {
+    $parts = explode(':', $full_state, 2);
+    $app_name = $parts[0];
+    $state_payload = $parts[1] ?? null;
+}
 
 // Get credentials from env
 $client_id = env('MS_GRAPH_CLIENT_ID');
@@ -119,6 +162,7 @@ if ($app_name) {
         $webhook_payload = json_encode([
             'provider' => 'microsoft',
             'app' => $app_name,
+            'state' => $state_payload, // Pass through the signed payload for verification
             'tokens' => [
                 'access_token' => $tokens['access_token'],
                 'refresh_token' => $tokens['refresh_token'],
@@ -148,8 +192,14 @@ if ($app_name) {
 
         if ($webhook_http_code >= 200 && $webhook_http_code < 300) {
             $webhook_sent = true;
+
+            // For brain-saas, redirect back to app after successful webhook
+            if ($app_name === 'brain-saas') {
+                header('Location: https://brain.giobi.com/app?integration=microsoft&status=connected');
+                exit;
+            }
         } else {
-            $webhook_error = "HTTP $webhook_http_code: $webhook_curl_error";
+            $webhook_error = "HTTP $webhook_http_code: $webhook_curl_error - Response: $webhook_response";
         }
     }
 }
